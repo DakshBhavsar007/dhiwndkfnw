@@ -153,6 +153,11 @@ def calculate_metrics(
         - p50: 50th percentile (median) of error (MW).
         - p90: 90th percentile of error (MW).
     """
+    if actual_col not in joined_df.columns and "generation" in joined_df.columns and forecast_col != "generation":
+        actual_col = "generation"
+    elif forecast_col not in joined_df.columns and "generation" in joined_df.columns and actual_col != "generation":
+        forecast_col = "generation"
+
     if joined_df.empty or actual_col not in joined_df.columns or forecast_col not in joined_df.columns:
         return {
             "count": 0,
