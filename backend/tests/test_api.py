@@ -210,3 +210,37 @@ def test_request_logging_header(client: TestClient):
     resp = client.get("/health", headers={"X-Request-ID": "test-trace-123"})
     assert resp.headers.get("X-Request-ID") == "test-trace-123"
 
+
+def test_accuracy_endpoint_with_histogram_and_debiased_mae(client: TestClient):
+    """GET /api/accuracy must return fixed 500 MW error histogram and debiased MAE."""
+    resp = client.get("/api/accuracy?start=2026-01-02&end=2026-01-10&cutoff=09:00")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Headline metrics
+    headline = data["headline_metrics"]
+    assert headline["count"] == 9 * 24  # 9 delivery days * 24 slots = 216 slots
+    assert headline["mae"] is not None and headline["mae"] > 0
+    assert headline["mae_debiased"] is not None and headline["mae_debiased"] > 0
+    # Because persistent positive bias exists, debiased MAE should be smaller than raw MAE
+    assert headline["mae_debiased"] <= headline["mae"]
+
+    # Fixed 500 MW Error Histogram
+    histogram = data["error_histogram"]
+    assert isinstance(histogram, list)
+    assert len(histogram) > 0
+
+    total_binned_count = 0
+    for bin_item in histogram:
+        assert "bin_start" in bin_item
+        assert "bin_end" in bin_item
+        assert "bin_label" in bin_item
+        assert "count" in bin_item
+        assert pytest.approx(bin_item["bin_end"] - bin_item["bin_start"]) == 500.0
+        assert "MW" in bin_item["bin_label"]
+        total_binned_count += bin_item["count"]
+
+    # The sum of all 500 MW bins must equal the total evaluated count
+    assert total_binned_count == headline["count"]
+
+

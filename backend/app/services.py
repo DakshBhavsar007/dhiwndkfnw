@@ -10,6 +10,7 @@ from backend.app.core.forecast_selection import select_forecast_at_cutoff
 from backend.app.core.grouping import (
     compute_error_by_horizon_bucket,
     compute_error_by_hour_of_day,
+    compute_error_histogram_bins,
 )
 from backend.app.core.metrics import (
     calculate_error_percentiles,
@@ -21,6 +22,7 @@ from backend.app.schemas import (
     DailySummaryMetrics,
     ErrorBandResponse,
     ErrorBandSlot,
+    ErrorHistogramBin,
     ForecastResponse,
     HeadlineAccuracyMetrics,
     HorizonBreakdownItem,
@@ -262,6 +264,12 @@ def get_accuracy_service(
         HorizonBreakdownItem(**row.to_dict()) for _, row in by_horizon_df.iterrows()
     ]
 
+    # Error distribution histogram (fixed 500 MW bins)
+    histogram_bins = compute_error_histogram_bins(
+        combined_df, actual_col="actual", forecast_col="forecast", bin_width=500.0
+    )
+    histogram_items = [ErrorHistogramBin(**b) for b in histogram_bins]
+
     return AccuracyResponse(
         start_date=start_valid,
         end_date=end_valid,
@@ -269,6 +277,7 @@ def get_accuracy_service(
         headline_metrics=HeadlineAccuracyMetrics(**headline_metrics_dict),
         by_hour_of_day=by_hour_items,
         by_horizon=by_horizon_items,
+        error_histogram=histogram_items,
     )
 
 

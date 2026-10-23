@@ -45,6 +45,7 @@ class RawActual30Min(BaseModel):
 class DailySummaryMetrics(BaseModel):
     count: int = Field(..., description="Number of evaluated hourly slots")
     mae: Optional[float] = Field(None, description="Mean Absolute Error in MW")
+    mae_debiased: Optional[float] = Field(None, description="Mean Absolute Error after removing mean bias in MW")
     rmse: Optional[float] = Field(None, description="Root Mean Square Error in MW")
     mape: Optional[float] = Field(None, description="Mean Absolute Percentage Error (%)")
     bias: Optional[float] = Field(None, description="Mean Error = mean(forecast - actual) in MW")
@@ -65,12 +66,20 @@ class ForecastResponse(BaseModel):
 class HeadlineAccuracyMetrics(BaseModel):
     count: int = Field(..., description="Total evaluated hourly slots")
     mae: Optional[float] = Field(None, description="Mean Absolute Error (MW)")
+    mae_debiased: Optional[float] = Field(None, description="Mean Absolute Error after removing mean bias (MW)")
     rmse: Optional[float] = Field(None, description="Root Mean Square Error (MW)")
     mape: Optional[float] = Field(None, description="Mean Absolute Percentage Error (%)")
     bias: Optional[float] = Field(None, description="Mean Error = mean(forecast - actual) (MW)")
     p10: Optional[float] = Field(None, description="10th percentile of signed error (MW)")
     p50: Optional[float] = Field(None, description="50th percentile (median) of signed error (MW)")
     p90: Optional[float] = Field(None, description="90th percentile of signed error (MW)")
+
+
+class ErrorHistogramBin(BaseModel):
+    bin_start: float = Field(..., description="Lower bound of signed error bin (inclusive) in MW")
+    bin_end: float = Field(..., description="Upper bound of signed error bin (exclusive) in MW")
+    bin_label: str = Field(..., description="Human-readable bin label, e.g. '-500 to 0 MW'")
+    count: int = Field(..., description="Count of hourly forecast slots in this bin")
 
 
 class HourOfDayBreakdownItem(BaseModel):
@@ -106,6 +115,10 @@ class AccuracyResponse(BaseModel):
     by_horizon: List[HorizonBreakdownItem] = Field(
         ...,
         description="Error breakdown by lead time bucket across ALL published forecast runs (12-18h, 18-24h, 24-30h, 30-36h, 36-42h)"
+    )
+    error_histogram: List[ErrorHistogramBin] = Field(
+        default_factory=list,
+        description="Fixed 500 MW binned distribution of signed error (forecast - actual) for the selected range"
     )
 
 

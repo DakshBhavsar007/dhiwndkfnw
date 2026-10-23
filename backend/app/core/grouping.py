@@ -1,6 +1,7 @@
 """Group-by error analysis utilities: error by hour-of-day and by horizon bucket."""
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+import numpy as np
 import pandas as pd
 from backend.app.core.metrics import calculate_metrics
 
@@ -98,3 +99,64 @@ def compute_error_by_horizon_bucket(
     out_df = pd.DataFrame(rows)
     cols = ["horizon_bucket", "count", "mae", "rmse", "mape", "bias", "p10", "p50", "p90"]
     return out_df[cols].reset_index(drop=True)
+
+
+def compute_error_histogram_bins(
+    joined_df: pd.DataFrame,
+    actual_col: str = "actual",
+    forecast_col: str = "forecast",
+    bin_width: float = 500.0,
+) -> List[Dict[str, Any]]:
+    """Compute fixed 500 MW bins of signed error (forecast - actual).
+
+    Parameters:
+        joined_df: DataFrame containing actual and forecast columns.
+        actual_col: Column name for actual outturn.
+        forecast_col: Column name for forecast.
+        bin_width: Fixed bin width in MW (default 500.0).
+
+    Returns:
+        List of dicts with:
+        ['bin_start', 'bin_end', 'bin_label', 'count']
+    """
+    if actual_col not in joined_df.columns and "generation" in joined_df.columns and forecast_col != "generation":
+        actual_col = "generation"
+    elif forecast_col not in joined_df.columns and "generation" in joined_df.columns and actual_col != "generation":
+        forecast_col = "generation"
+
+    if joined_df.empty or actual_col not in joined_df.columns or forecast_col not in joined_df.columns:
+        return []
+
+    act = pd.to_numeric(joined_df[actual_col], errors="coerce")
+    fc = pd.to_numeric(joined_df[forecast_col], errors="coerce")
+    valid = np.isfinite(act) & np.isfinite(fc)
+
+    if not np.any(valid):
+        return []
+
+    errors = (fc[valid] - act[valid]).to_numpy()
+    min_err = float(np.min(errors))
+    max_err = float(np.max(errors))
+
+    start = float(np.floor(min_err / bin_width) * bin_width)
+    end = float(np.ceil(max_err / bin_width) * bin_width)
+    if start == end:
+        end += bin_width
+
+    bin_edges = np.arange(start, end + bin_width, bin_width)
+    counts, edges = np.histogram(errors, bins=bin_edges)
+
+    out = []
+    for i in range(len(counts)):
+        b_start = float(edges[i])
+        b_end = float(edges[i + 1])
+        s_str = f"{int(b_start):+d}" if b_start != 0 else "0"
+        e_str = f"{int(b_end):+d}" if b_end != 0 else "0"
+        out.append({
+            "bin_start": b_start,
+            "bin_end": b_end,
+            "bin_label": f"{s_str} to {e_str} MW",
+            "count": int(counts[i]),
+        })
+    return out
+

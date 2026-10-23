@@ -65,6 +65,19 @@ def calculate_mae(
     return float(np.mean(np.abs(fc - act)))
 
 
+def calculate_mae_debiased(
+    actual: Union[np.ndarray, pd.Series, list],
+    forecast: Union[np.ndarray, pd.Series, list],
+) -> float:
+    """Calculate Mean Absolute Error after removing mean bias: mean(|(forecast - actual) - mean_bias|)."""
+    act, fc = _clean_arrays(actual, forecast)
+    if len(act) == 0:
+        return float(np.nan)
+    errors = fc - act
+    mean_bias = np.mean(errors)
+    return float(np.mean(np.abs(errors - mean_bias)))
+
+
 def calculate_rmse(
     actual: Union[np.ndarray, pd.Series, list],
     forecast: Union[np.ndarray, pd.Series, list],
@@ -162,6 +175,7 @@ def calculate_metrics(
         return {
             "count": 0,
             "mae": float(np.nan),
+            "mae_debiased": float(np.nan),
             "rmse": float(np.nan),
             "mape": float(np.nan),
             "bias": float(np.nan),
@@ -176,6 +190,7 @@ def calculate_metrics(
         return {
             "count": 0,
             "mae": float(np.nan),
+            "mae_debiased": float(np.nan),
             "rmse": float(np.nan),
             "mape": float(np.nan),
             "bias": float(np.nan),
@@ -189,6 +204,7 @@ def calculate_metrics(
     return {
         "count": n,
         "mae": calculate_mae(act, fc),
+        "mae_debiased": calculate_mae_debiased(act, fc),
         "rmse": calculate_rmse(act, fc),
         "mape": calculate_mape(act, fc, zero_handling=zero_handling),
         "bias": calculate_bias(act, fc),

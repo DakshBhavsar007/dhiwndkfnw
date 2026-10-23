@@ -104,5 +104,24 @@ def test_calculate_metrics_empty():
     metrics = calculate_metrics(pd.DataFrame(columns=["actual", "forecast"]))
     assert metrics["count"] == 0
     assert np.isnan(metrics["mae"])
+    assert np.isnan(metrics["mae_debiased"])
     assert np.isnan(metrics["rmse"])
     assert np.isnan(metrics["bias"])
+
+
+def test_mae_debiased():
+    """Verify MAE after removing mean bias on known constant and variable errors."""
+    from backend.app.core.metrics import calculate_mae_debiased
+
+    # Case 1: Pure constant offset (+100 MW bias everywhere)
+    # Errors: [+100, +100, +100] -> Mean bias: +100 -> Debiased errors: [0, 0, 0] -> MAE debiased = 0.0
+    actual = np.array([200.0, 300.0, 400.0])
+    forecast_constant_bias = np.array([300.0, 400.0, 500.0])
+    assert pytest.approx(calculate_mae(actual, forecast_constant_bias)) == 100.0
+    assert pytest.approx(calculate_mae_debiased(actual, forecast_constant_bias)) == 0.0
+
+    # Case 2: Mean bias = +50, errors = [0, +50, +100] -> debiased = [-50, 0, +50] -> MAE debiased = 33.33
+    fc_var = np.array([200.0, 350.0, 500.0])
+    assert pytest.approx(calculate_mae(actual, fc_var)) == 50.0  # (0 + 50 + 100)/3
+    assert pytest.approx(calculate_mae_debiased(actual, fc_var)) == 100.0 / 3.0
+
