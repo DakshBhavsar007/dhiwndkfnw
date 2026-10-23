@@ -8,13 +8,18 @@ The team buys power on the UK day-ahead market and must decide on day D-1 (befor
 2. Quantified forecast accuracy.
 
 ## Data (Elexon BMRS only, national WIND only)
-- **Actuals**: `FUELHH` stream, `fuelType=WIND`. Fields: `startTime` (30-min), `generation` (MW).
-- **Forecasts**: `WINDFOR` stream. Fields: `startTime`, `publishTime`, `generation` (MW).
-- **Scope**: Decisions made in January 2026 only (delivery days 1 Jan to 31 Jan 2026; fetch a few days of buffer on both sides if needed).
-- Verify exact endpoint params and response shapes from the Elexon API docs by actually calling the API; do not guess.
+- **Actuals**: `FUELHH` stream, `fuelType=WIND`. Half-hourly resolution (30-min settlement periods starting at `:00` and `:30`, 48 periods/day). Fields: `startTime` (UTC), `generation` (MW).
+- **Forecasts**: `WINDFOR` stream. Hourly resolution (minute distribution: 100% of rows have `startTime` minute `:00`, 0 rows at `:30`; exactly 73 hourly rows per publish run spanning -24h to +48h). Fields: `startTime` (UTC), `publishTime` (UTC), `generation` (MW).
+- **Ingestion Window**: 2025-12-28 to 2026-02-03 inclusive = **38 days** (4 days in Dec 2025 + 31 days in Jan 2026 + 3 days in Feb 2026).
+- **Scope**: Decisions made in January 2026 (2026-01-01 to 2026-01-31 inclusive). Since decisions made on D-1 are for delivery on D, the delivery days are **2026-01-02 to 2026-02-01** (31 delivery days).
+- **Generation Metric**: Represents national wind power in Megawatts (MW) across visible transmission-metered wind farms (Power Park Modules) for GB. Official API documentation does not explicitly specify whether forecast `generation` is an hourly average MW or instantaneous MW; domain convention treats it as hourly average MW.
+
+## Resolution Alignment: Option A
+- **Forecast / Evaluation Alignment**: `WINDFOR` forecasts have 24 hourly slots per delivery day (00:00 to 23:00 UTC), not 48 periods. For metric calculations and tabular joins, aggregate `FUELHH` actuals to hourly by taking the arithmetic mean of the two 30-minute settlement periods in each hour (`HH:00` and `HH:30`). Join with forecast on the hourly `startTime`.
+- **Chart / Visualization**: Keep raw 30-min actuals from `FUELHH` and render the hourly forecast as a step line spanning each hourly slot $[HH:00, (HH+1):00)$.
 
 ## Core Logic Rule
-- For a given delivery day D and decision cutoff (default 09:00 Europe/London on D-1, configurable), for each 30-min `startTime` use the forecast row with the **LATEST `publishTime` <= cutoff**.
+- For a given delivery day D and decision cutoff (default 09:00 Europe/London on D-1, configurable), for each of the 24 hourly `startTime` slots use the forecast row with the **LATEST `publishTime` <= cutoff**.
 - **Never use forecasts published after the cutoff** (strictly no future leakage).
 - Handle UTC vs Europe/London and DST correctly.
 
