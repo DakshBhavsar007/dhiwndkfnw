@@ -272,6 +272,9 @@ def get_accuracy_service(
     )
 
 
+BUFFER_HISTORY_START_DATE = "2025-12-29"
+
+
 def get_error_band_service(
     date_str: str,
     cutoff_time: str,
@@ -283,11 +286,18 @@ def get_error_band_service(
 
     # Leakage Rule: At decision time on D-1 09:00, actuals of D-1 are incomplete.
     # Therefore, historical delivery days used must be strictly <= D-2.
+    # We allow historical days from the fetched buffer: delivery days from 2025-12-29 onward.
     target_dt = pd.Timestamp(valid_date)
     d_minus_2_str = (target_dt - pd.Timedelta(days=2)).strftime("%Y-%m-%d")
 
-    all_dates = get_all_valid_dates()
-    eligible_history_dates = [d for d in all_dates if d <= d_minus_2_str]
+    if d_minus_2_str < BUFFER_HISTORY_START_DATE:
+        eligible_history_dates = []
+    else:
+        eligible_history_dates = [
+            d.strftime("%Y-%m-%d")
+            for d in pd.date_range(BUFFER_HISTORY_START_DATE, d_minus_2_str, freq="1D")
+        ]
+
     history_count = len(eligible_history_dates)
 
     if history_count < 3:
@@ -325,26 +335,14 @@ def get_error_band_service(
         ]
         joined = pd.merge(fc, act[["startTime", "actual"]], on="startTime", how="inner")
         joined["error"] = joined["forecast"] - joined["actual"]
-        # Add local hour of day to allow hour-specific error distributions
-        joined["hour_of_day"] = joined["startTime"].dt.tz_convert(tz).dt.hour
         hist_joined_list.append(joined)
 
     hist_df = pd.concat(hist_joined_list, ignore_index=True)
+    valid_errors = hist_df["error"].dropna().values
 
-    # Global fallback percentiles
-    global_pcts = calculate_error_percentiles(
-        hist_df["actual"].values, hist_df["forecast"].values, (10.0, 90.0)
-    )
-    global_p10 = global_pcts["p10"]
-    global_p90 = global_pcts["p90"]
-
-    # Precalculate per-hour percentiles
-    hour_pcts = {}
-    for hour, grp in hist_df.groupby("hour_of_day"):
-        pcts = calculate_error_percentiles(
-            grp["actual"].values, grp["forecast"].values, (10.0, 90.0)
-        )
-        hour_pcts[hour] = pcts
+    # Percentiles of signed error (error = forecast - actual, positive = over-forecast)
+    p10_error = float(np.percentile(valid_errors, 10.0))
+    p90_error = float(np.percentile(valid_errors, 90.0))
 
     # 2. Select forecast for the target delivery day
     target_fc = select_forecast_at_cutoff(
@@ -354,35 +352,26 @@ def get_error_band_service(
         tz=tz,
         day_offset=1,
     )
-    target_fc["hour_of_day"] = target_fc["startTime"].dt.tz_convert(tz).dt.hour
 
-    # 3. Construct error bands:
-    # error = forecast - actual => actual = forecast - error
-    # High error (p90) implies lower actual = forecast - p90
-    # Low error (p10) implies higher actual = forecast - p10
+    # 3. Construct error bands for ACTUAL generation:
+    # error = forecast - actual  =>  actual = forecast - error
+    # lower = forecast - P90(error), upper = forecast - P10(error), both clipped at 0
     band_slots: List[ErrorBandSlot] = []
     for _, row in target_fc.iterrows():
         fc_val = float(row["forecast"]) if pd.notna(row["forecast"]) else 0.0
-        hr = row["hour_of_day"]
-        pcts = hour_pcts.get(hr, {"p10": global_p10, "p90": global_p90})
-        p10_e = float(pcts["p10"])
-        p90_e = float(pcts["p90"])
 
-        # Determine expected lower and upper bounds on actual generation
-        bound1 = max(0.0, fc_val - p90_e)
-        bound2 = max(0.0, fc_val - p10_e)
-        lower_bound = round(min(bound1, bound2), 1)
-        upper_bound = round(max(bound1, bound2), 1)
+        lower_bound = max(0.0, fc_val - p90_error)
+        upper_bound = max(0.0, fc_val - p10_error)
 
         band_slots.append(
             ErrorBandSlot(
                 startTime=row["startTime"].isoformat(),
                 startTime_local=row["startTime"].tz_convert(tz).isoformat(),
                 forecast=round(fc_val, 1),
-                lower_bound=lower_bound,
-                upper_bound=upper_bound,
-                p10_error=round(p10_e, 1),
-                p90_error=round(p90_e, 1),
+                lower_bound=round(lower_bound, 1),
+                upper_bound=round(upper_bound, 1),
+                p10_error=round(p10_error, 1),
+                p90_error=round(p90_error, 1),
             )
         )
 
@@ -395,3 +384,4 @@ def get_error_band_service(
         band=band_slots,
         reason=None,
     )
+

@@ -1,0 +1,26 @@
+# Python & Virtual Environments
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node & Frontend Build
+node_modules/
+dist/
+build/
+.next/
+
+# Environment & IDE
+.env
+.env.local
+.vscode/
+.idea/

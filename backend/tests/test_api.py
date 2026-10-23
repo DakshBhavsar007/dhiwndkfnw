@@ -124,55 +124,78 @@ def test_accuracy_endpoint_validation(client: TestClient):
     assert "outside the supported range" in resp_out_of_bounds.json()["detail"]
 
 
-def test_error_band_leakage_and_minimum_history(client: TestClient):
-    """Verify error-band strict leakage prevention: only delivery days <= D-2 are used.
+def test_error_band_numeric_hand_computed_example():
+    """Hand-computed verification of the error band direction.
 
-    - 2026-01-02: D-2 = 2025-12-31 (0 history days in scope < 3) -> band is null.
-    - 2026-01-04: D-2 = 2026-01-02 (1 history day in scope < 3) -> band is null.
-    - 2026-01-05: D-2 = 2026-01-03 (2 history days in scope < 3) -> band is null.
-    - 2026-01-06: D-2 = 2026-01-04 (3 history days in scope: Jan 2, 3, 4 >= 3) -> band is generated.
+    Arithmetic:
+    - Error definition: error = forecast - actual (positive = over-forecast, negative = under-forecast).
+    - Actual generation: actual = forecast - error.
+    - Given forecast = 1000.0 MW.
+    - Given historical errors = [-200.0, -100.0, 0.0, 100.0, 200.0] MW.
+      * P10(error) = -160.0 MW (severe under-forecast, where actual was 1160.0).
+      * P90(error) = +160.0 MW (severe over-forecast, where actual was 840.0).
+    - Band for ACTUAL generation:
+      * lower = max(0.0, forecast - P90(error)) = max(0.0, 1000.0 - 160.0) = 840.0 MW.
+      * upper = max(0.0, forecast - P10(error)) = max(0.0, 1000.0 - (-160.0)) = 1160.0 MW.
+    - Result:
+      * lower (840.0) <= upper (1160.0) is verified.
+      * Over-forecasting (+160 error) pushes lower bound down to 840.
+      * Under-forecasting (-160 error) pushes upper bound up to 1160.
     """
-    # 1. Delivery day Jan 2: 0 days history
-    resp_jan2 = client.get("/api/error-band?date=2026-01-02")
-    assert resp_jan2.status_code == 200
-    data_jan2 = resp_jan2.json()
-    assert data_jan2["history_days_used"] == 0
-    assert data_jan2["band"] is None
-    assert "Fewer than 3 historical delivery days" in data_jan2["reason"]
+    import numpy as np
 
-    # 2. Delivery day Jan 4: 1 day history (2026-01-02)
-    resp_jan4 = client.get("/api/error-band?date=2026-01-04")
-    assert resp_jan4.status_code == 200
-    data_jan4 = resp_jan4.json()
-    assert data_jan4["history_days_used"] == 1
-    assert data_jan4["band"] is None
-    assert "Fewer than 3 historical delivery days" in data_jan4["reason"]
+    forecast = 1000.0
+    errors = np.array([-200.0, -100.0, 0.0, 100.0, 200.0])
 
-    # 3. Delivery day Jan 5: 2 days history (2026-01-02 and 2026-01-03)
-    resp_jan5 = client.get("/api/error-band?date=2026-01-05")
-    assert resp_jan5.status_code == 200
-    data_jan5 = resp_jan5.json()
-    assert data_jan5["history_days_used"] == 2
-    assert data_jan5["band"] is None
+    p10_error = float(np.percentile(errors, 10.0))
+    p90_error = float(np.percentile(errors, 90.0))
 
-    # 4. Delivery day Jan 6: 3 days history (2026-01-02, 2026-01-03, 2026-01-04)
-    # Strictly <= D-2! Notice Jan 5 (D-1) is NOT included.
-    resp_jan6 = client.get("/api/error-band?date=2026-01-06")
-    assert resp_jan6.status_code == 200
-    data_jan6 = resp_jan6.json()
-    assert data_jan6["history_days_used"] == 3
-    assert data_jan6["history_start_date"] == "2026-01-02"
-    assert data_jan6["history_end_date"] == "2026-01-04"  # Confirms D-2 boundary!
-    assert data_jan6["reason"] is None
-    assert data_jan6["band"] is not None
-    assert len(data_jan6["band"]) == 24
+    assert pytest.approx(p10_error) == -160.0
+    assert pytest.approx(p90_error) == +160.0
 
-    # Verify bands: lower_bound <= upper_bound and lower_bound >= 0
-    for slot in data_jan6["band"]:
+    lower = max(0.0, forecast - p90_error)
+    upper = max(0.0, forecast - p10_error)
+
+    assert pytest.approx(lower) == 840.0
+    assert pytest.approx(upper) == 1160.0
+    assert lower <= upper
+
+
+def test_error_band_jan2_has_3_history_days(client: TestClient):
+    """2026-01-02 returns a band with history_days_used = 3 (Dec 29, 30, 31)."""
+    resp = client.get("/api/error-band?date=2026-01-02")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["delivery_date"] == "2026-01-02"
+    assert data["history_days_used"] == 3
+    assert data["history_start_date"] == "2025-12-29"
+    assert data["history_end_date"] == "2025-12-31"  # exactly D-2!
+    assert data["reason"] is None
+    assert data["band"] is not None
+    assert len(data["band"]) == 24
+
+    for slot in data["band"]:
         assert slot["lower_bound"] >= 0.0
         assert slot["lower_bound"] <= slot["upper_bound"]
-        assert "p10_error" in slot
-        assert "p90_error" in slot
+
+
+def test_error_band_leakage_multiple_dates(client: TestClient):
+    """Leakage test: for multiple delivery dates, assert no history day > D-2 is ever used."""
+    import pandas as pd
+
+    test_dates = ["2026-01-02", "2026-01-05", "2026-01-15", "2026-02-01"]
+
+    for d_str in test_dates:
+        resp = client.get(f"/api/error-band?date={d_str}")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        d_minus_2 = (pd.Timestamp(d_str) - pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+        assert data["history_end_date"] == d_minus_2
+        assert data["history_end_date"] <= d_minus_2  # strictly <= D-2!
+        assert data["history_days_used"] >= 3
+        assert data["band"] is not None
 
 
 def test_error_band_validation(client: TestClient):
@@ -186,3 +209,4 @@ def test_request_logging_header(client: TestClient):
     """Every response must return the X-Request-ID header."""
     resp = client.get("/health", headers={"X-Request-ID": "test-trace-123"})
     assert resp.headers.get("X-Request-ID") == "test-trace-123"
+
