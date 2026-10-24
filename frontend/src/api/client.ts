@@ -4,6 +4,8 @@
 
 import type {
   AccuracyResponse,
+  BacktestResponse,
+  DecisionSummaryResponse,
   ErrorBandResponse,
   ForecastResponse,
   HealthResponse,
@@ -68,4 +70,10 @@ export const apiClient = {
 
   getErrorBand: (date: string, cutoff: string = '09:00') =>
     request<ErrorBandResponse>('/api/error-band', { date, cutoff }),
+
+  getDecisionSummary: (date: string, cutoff: string = '09:00') =>
+    request<DecisionSummaryResponse>('/api/decision-summary', { date, cutoff }),
+
+  getBacktest: (cutoff: string = '09:00') =>
+    request<BacktestResponse>('/api/backtest', { cutoff }),
 };

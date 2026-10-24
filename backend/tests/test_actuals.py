@@ -66,8 +66,8 @@ def test_missing_half_hour_flagged_when_retained():
 
     assert len(hourly) == 2
     assert "is_complete" in hourly.columns
-    assert hourly.iloc[0]["is_complete"] is True or hourly.iloc[0]["is_complete"] == True
-    assert hourly.iloc[1]["is_complete"] is False or hourly.iloc[1]["is_complete"] == False
+    assert bool(hourly.iloc[0]["is_complete"]) is True
+    assert bool(hourly.iloc[1]["is_complete"]) is False
     assert hourly.iloc[1]["actual"] == 8000.0
 
 

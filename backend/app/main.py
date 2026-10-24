@@ -2,7 +2,6 @@
 
 from contextlib import asynccontextmanager
 import logging
-from typing import Optional
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,6 +9,8 @@ from backend.app.data_loader import data_loader
 from backend.app.middleware import RequestLoggingMiddleware
 from backend.app.schemas import (
     AccuracyResponse,
+    BacktestResponse,
+    DecisionSummaryResponse,
     ErrorBandResponse,
     ForecastResponse,
     HealthResponse,
@@ -20,6 +21,8 @@ from backend.app.services import (
     MAX_DELIVERY_DATE,
     MIN_DELIVERY_DATE,
     get_accuracy_service,
+    get_backtest_service,
+    get_decision_summary_service,
     get_error_band_service,
     get_forecast_service,
     get_meta_service,
@@ -188,3 +191,46 @@ def get_error_band(
     return get_error_band_service(
         date_str=date, cutoff_time=cutoff, loader=data_loader
     )
+
+
+@app.get(
+    "/api/decision-summary",
+    response_model=DecisionSummaryResponse,
+    summary="Day-ahead decision summary, shortfall buffer, and risk hours",
+    tags=["Decisions"],
+)
+def get_decision_summary(
+    date: str = Query(
+        ...,
+        description="Delivery date (YYYY-MM-DD), valid between 2026-01-02 and 2026-02-01",
+        examples=["2026-01-10"],
+    ),
+    cutoff: str = Query(
+        DEFAULT_CUTOFF,
+        description="Decision cutoff time on D-1 (HH:MM in Europe/London)",
+        examples=["09:00"],
+    ),
+) -> DecisionSummaryResponse:
+    """Retrieve decision summary for day D including expected wind, P90 shortfall buffer, typical offset, and risk hours."""
+    return get_decision_summary_service(
+        date_str=date, cutoff_time=cutoff, loader=data_loader
+    )
+
+
+@app.get(
+    "/api/backtest",
+    response_model=BacktestResponse,
+    summary="Leakage-free rolling backtest of the decision-summary logic",
+    tags=["Decisions"],
+)
+def get_backtest(
+    cutoff: str = Query(
+        DEFAULT_CUTOFF,
+        description="Decision cutoff time on D-1 (HH:MM in Europe/London)",
+        examples=["09:00"],
+    ),
+) -> BacktestResponse:
+    """Run rolling, leakage-free backtest evaluating raw vs. bias-adjusted forecast and buffer breach rates."""
+    return get_backtest_service(cutoff_time=cutoff, loader=data_loader)
+
+

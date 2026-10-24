@@ -6,7 +6,7 @@ and saves deterministic Parquet snapshots to backend/data/.
 
 import argparse
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
 

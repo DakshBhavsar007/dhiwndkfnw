@@ -1,7 +1,6 @@
 """Unit tests for fetch_data script and data integrity."""
 
 import pandas as pd
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 

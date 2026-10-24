@@ -1,7 +1,7 @@
 """Business logic and service layer for the wind forecast monitoring API."""
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 import numpy as np
 import pandas as pd
 from fastapi import HTTPException
@@ -13,13 +13,16 @@ from backend.app.core.grouping import (
     compute_error_histogram_bins,
 )
 from backend.app.core.metrics import (
-    calculate_error_percentiles,
     calculate_metrics,
 )
 from backend.app.data_loader import DataLoader
 from backend.app.schemas import (
     AccuracyResponse,
+    BacktestDailyItem,
+    BacktestResponse,
+    BacktestSummary,
     DailySummaryMetrics,
+    DecisionSummaryResponse,
     ErrorBandResponse,
     ErrorBandSlot,
     ErrorHistogramBin,
@@ -393,4 +396,287 @@ def get_error_band_service(
         band=band_slots,
         reason=None,
     )
+
+
+def get_decision_summary_service(
+    date_str: str,
+    cutoff_time: str,
+    loader: DataLoader,
+    tz: str = DEFAULT_TIMEZONE,
+) -> DecisionSummaryResponse:
+    """Compute day-ahead decision summary, expected wind, shortfall buffer (P90), offset, and risk hours."""
+    valid_date = validate_delivery_date(date_str)
+
+    # 1. Select cutoff-aware forecast for the target delivery day
+    target_fc = select_forecast_at_cutoff(
+        loader.forecasts_df,
+        delivery_date=valid_date,
+        cutoff_time=cutoff_time,
+        tz=tz,
+        day_offset=1,
+    )
+    expected_wind_mwh = float(target_fc["forecast"].fillna(0.0).sum())
+    slot_count = len(target_fc)
+    avg_fc = (expected_wind_mwh / slot_count) if slot_count > 0 else 0.0
+
+    # 2. Determine eligible history delivery days strictly <= D-2
+    target_dt = pd.Timestamp(valid_date)
+    d_minus_2_str = (target_dt - pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+
+    if d_minus_2_str < BUFFER_HISTORY_START_DATE:
+        eligible_history_dates = []
+    else:
+        eligible_history_dates = [
+            d.strftime("%Y-%m-%d")
+            for d in pd.date_range(BUFFER_HISTORY_START_DATE, d_minus_2_str, freq="1D")
+        ]
+
+    history_count = len(eligible_history_dates)
+
+    # If fewer than 3 historical days are available, return null buffer fields with reason
+    if history_count < 3:
+        reason = (
+            f"Fewer than 3 historical delivery days available ({history_count} < 3). "
+            f"At decision cutoff on D-1 {cutoff_time}, actuals are only complete through D-2 ({d_minus_2_str})."
+        )
+        recommendation = (
+            f"Forecast wind averages {round(avg_fc):,} MW ({round(expected_wind_mwh):,} MWh total). "
+            f"Fewer than 3 historical delivery days are available at D-1 {cutoff_time} cutoff to compute "
+            f"historical shortfall buffer or typical offset. Demand data is outside scope so the actual procurement volume cannot be computed."
+        )
+        return DecisionSummaryResponse(
+            delivery_date=valid_date,
+            cutoff_time=cutoff_time,
+            expected_wind_mwh=round(expected_wind_mwh, 1),
+            shortfall_buffer_mw=None,
+            typical_offset_mw=None,
+            bias_adjusted_expected_wind_mwh=None,
+            risk_hours=[],
+            low_confidence=True,
+            history_days_used=history_count,
+            history_start_date=eligible_history_dates[0] if eligible_history_dates else None,
+            history_end_date=eligible_history_dates[-1] if eligible_history_dates else None,
+            recommendation=recommendation,
+            reason=reason,
+        )
+
+    # 3. Gather historical forecast vs actual pairs strictly <= D-2
+    hist_joined_list: List[pd.DataFrame] = []
+    for h_date in eligible_history_dates:
+        fc = select_forecast_at_cutoff(
+            loader.forecasts_df,
+            delivery_date=h_date,
+            cutoff_time=cutoff_time,
+            tz=tz,
+            day_offset=1,
+        )
+        st_local = pd.Timestamp(h_date).tz_localize(tz)
+        end_local = st_local + pd.DateOffset(days=1)
+        st_utc = st_local.tz_convert("UTC")
+        end_utc = end_local.tz_convert("UTC")
+
+        act = loader.hourly_actuals_df[
+            (loader.hourly_actuals_df["startTime"] >= st_utc)
+            & (loader.hourly_actuals_df["startTime"] < end_utc)
+        ]
+        joined = pd.merge(fc, act[["startTime", "actual"]], on="startTime", how="inner")
+        joined["error"] = joined["forecast"] - joined["actual"]
+        hist_joined_list.append(joined)
+
+    hist_df = pd.concat(hist_joined_list, ignore_index=True)
+    valid_errors = hist_df["error"].dropna().values
+
+    # 4. Shortfall buffer: P90 of signed error (forecast - actual), floored at 0
+    raw_p90 = float(np.percentile(valid_errors, 90.0))
+    shortfall_buffer_mw = max(0.0, raw_p90)
+
+    # 5. Typical offset: median of signed error (persistent bias)
+    typical_offset_mw = float(np.median(valid_errors))
+
+    # Buffer relative to bias-adjusted forecast = P90 - median
+    shortfall_buffer_rel_adj = round(raw_p90 - typical_offset_mw, 1)
+
+    # 6. Bias-adjusted expected wind: forecast minus typical_offset, floored at 0 per hour
+    adjusted_slots = [
+        max(0.0, float(fc_val) - typical_offset_mw)
+        for fc_val in target_fc["forecast"].fillna(0.0)
+    ]
+    bias_adjusted_expected_wind_mwh = sum(adjusted_slots)
+
+    # 7. Risk hours: top 3 local hours with highest historical hour-of-day mean over-forecast, sorted ascending
+    if hist_df["startTime"].dt.tz is None:
+        hist_local_times = pd.to_datetime(hist_df["startTime"], utc=True).dt.tz_convert(tz)
+    else:
+        hist_local_times = hist_df["startTime"].dt.tz_convert(tz)
+    hist_df["local_hour"] = hist_local_times.dt.hour
+
+    hour_means = hist_df.groupby("local_hour")["error"].mean()
+    top_hours = hour_means.sort_values(ascending=False).head(3).index.tolist()
+    risk_hours = sorted([int(h) for h in top_hours])
+
+    # Confidence assessment: low confidence if fewer than 7 days
+    low_confidence = history_count < 7
+
+    # 8. Recommendation text
+    offset_dir = "above" if typical_offset_mw >= 0 else "below"
+    offset_abs = abs(round(typical_offset_mw))
+    buffer_round = round(shortfall_buffer_mw)
+    risk_hours_str = ", ".join(f"{h:02d}:00" for h in risk_hours) if risk_hours else "peak hours"
+
+    recommendation = (
+        f"Forecast wind averages {round(avg_fc):,} MW. "
+        f"Historically forecasts ran {offset_abs:,} MW {offset_dir} actual (median, {history_count} days). "
+        f"Plan for up to {buffer_round:,} MW less wind than forecast (P90); "
+        f"consider covering that with thermal/other sources, especially around {risk_hours_str}. "
+        f"Demand data is outside scope so the actual procurement volume cannot be computed."
+    )
+
+    return DecisionSummaryResponse(
+        delivery_date=valid_date,
+        cutoff_time=cutoff_time,
+        expected_wind_mwh=round(expected_wind_mwh, 1),
+        shortfall_buffer_mw=round(shortfall_buffer_mw, 1),
+        shortfall_buffer_relative_to_adjusted_mw=shortfall_buffer_rel_adj,
+        typical_offset_mw=round(typical_offset_mw, 1),
+        bias_adjusted_expected_wind_mwh=round(bias_adjusted_expected_wind_mwh, 1),
+        risk_hours=risk_hours,
+        low_confidence=low_confidence,
+        history_days_used=history_count,
+        history_start_date=eligible_history_dates[0],
+        history_end_date=eligible_history_dates[-1],
+        recommendation=recommendation,
+        reason=None,
+    )
+
+
+def get_backtest_service(
+    cutoff_time: str = DEFAULT_CUTOFF,
+    loader: DataLoader = None,
+    tz: str = DEFAULT_TIMEZONE,
+) -> BacktestResponse:
+    """Run rolling, leakage-free backtest across delivery days 2026-01-02 to 2026-02-01.
+
+    For each delivery day D with >= 3 history days (<= D-2, buffer allowed from 2025-12-29):
+    1. Compute typical_offset (median) and shortfall_buffer (P90 floored at 0) from history <= D-2.
+    2. Evaluate on day D:
+       - MAE of raw forecast
+       - MAE of bias-adjusted forecast (forecast - offset, floored at 0 per hour)
+       - Buffer breach rate: fraction of hours on day D where actual < forecast - buffer.
+    """
+    if loader is None:
+        raise ValueError("DataLoader instance must be provided.")
+
+    # Dates to pre-extract: from buffer start (2025-12-29) through end of January (2026-02-01)
+    all_dates = [
+        d.strftime("%Y-%m-%d")
+        for d in pd.date_range(BUFFER_HISTORY_START_DATE, MAX_DELIVERY_DATE, freq="1D")
+    ]
+
+    day_df_map = {}
+    for d_str in all_dates:
+        fc = select_forecast_at_cutoff(
+            loader.forecasts_df,
+            delivery_date=d_str,
+            cutoff_time=cutoff_time,
+            tz=tz,
+            day_offset=1,
+        )
+        st_local = pd.Timestamp(d_str).tz_localize(tz)
+        end_local = st_local + pd.DateOffset(days=1)
+        st_utc = st_local.tz_convert("UTC")
+        end_utc = end_local.tz_convert("UTC")
+
+        act = loader.hourly_actuals_df[
+            (loader.hourly_actuals_df["startTime"] >= st_utc)
+            & (loader.hourly_actuals_df["startTime"] < end_utc)
+        ]
+        joined = pd.merge(fc, act[["startTime", "actual"]], on="startTime", how="inner")
+        joined["error"] = joined["forecast"] - joined["actual"]
+        day_df_map[d_str] = joined
+
+    eval_dates = [
+        d.strftime("%Y-%m-%d")
+        for d in pd.date_range(MIN_DELIVERY_DATE, MAX_DELIVERY_DATE, freq="1D")
+    ]
+
+    daily_items: List[BacktestDailyItem] = []
+
+    for d_str in eval_dates:
+        target_dt = pd.Timestamp(d_str)
+        d_minus_2_str = (target_dt - pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+
+        eligible_history = [d for d in all_dates if BUFFER_HISTORY_START_DATE <= d <= d_minus_2_str]
+        if len(eligible_history) < 3:
+            continue
+
+        hist_dfs = [day_df_map[d] for d in eligible_history if d in day_df_map and not day_df_map[d].empty]
+        if not hist_dfs:
+            continue
+        combined_hist = pd.concat(hist_dfs, ignore_index=True)
+        hist_errors = combined_hist["error"].dropna().values
+        if len(hist_errors) == 0:
+            continue
+
+        typical_offset = float(np.median(hist_errors))
+        shortfall_buffer = max(0.0, float(np.percentile(hist_errors, 90.0)))
+
+        target_df = day_df_map.get(d_str)
+        if target_df is None or target_df.empty:
+            continue
+
+        raw_errors = (target_df["forecast"] - target_df["actual"]).dropna().values
+        mae_raw = float(np.mean(np.abs(raw_errors)))
+
+        adjusted_forecast = np.maximum(0.0, target_df["forecast"].values - typical_offset)
+        adjusted_errors = adjusted_forecast - target_df["actual"].values
+        mae_adjusted = float(np.mean(np.abs(adjusted_errors)))
+
+        # Buffer breach: actual < forecast - buffer
+        breaches = target_df["actual"].values < (target_df["forecast"].values - shortfall_buffer)
+        breach_count = int(np.sum(breaches))
+        slot_count = int(len(target_df))
+        breach_rate = float(breach_count / slot_count) if slot_count > 0 else 0.0
+
+        daily_items.append(
+            BacktestDailyItem(
+                delivery_date=d_str,
+                history_days_used=len(eligible_history),
+                typical_offset_mw=round(typical_offset, 1),
+                shortfall_buffer_mw=round(shortfall_buffer, 1),
+                mae_raw=round(mae_raw, 1),
+                mae_adjusted=round(mae_adjusted, 1),
+                adjusted_beats_raw=bool(mae_adjusted < mae_raw),
+                breach_count=breach_count,
+                slot_count=slot_count,
+                breach_rate=round(breach_rate, 4),
+            )
+        )
+
+    days_eval = len(daily_items)
+    mean_raw = float(np.mean([d.mae_raw for d in daily_items])) if days_eval > 0 else 0.0
+    mean_adj = float(np.mean([d.mae_adjusted for d in daily_items])) if days_eval > 0 else 0.0
+    beats_count = sum(1 for d in daily_items if d.adjusted_beats_raw)
+    beats_pct = (beats_count / days_eval * 100.0) if days_eval > 0 else 0.0
+    tot_breaches = sum(d.breach_count for d in daily_items)
+    tot_slots = sum(d.slot_count for d in daily_items)
+    overall_breach_rate = (tot_breaches / tot_slots) if tot_slots > 0 else 0.0
+
+    summary = BacktestSummary(
+        days_evaluated=days_eval,
+        mean_mae_raw=round(mean_raw, 1),
+        mean_mae_adjusted=round(mean_adj, 1),
+        days_adjusted_beats_raw=beats_count,
+        days_adjusted_beats_raw_pct=round(beats_pct, 1),
+        total_breaches=tot_breaches,
+        total_slots=tot_slots,
+        overall_breach_rate=round(overall_breach_rate, 4),
+    )
+
+    return BacktestResponse(
+        cutoff_time=cutoff_time,
+        summary=summary,
+        daily=daily_items,
+    )
+
+
 

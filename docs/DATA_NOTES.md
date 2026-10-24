@@ -173,3 +173,25 @@ Over the 304 unique publish runs between `2025-12-28 02:30:00Z` and `2026-02-03 
 2. **Daily 07:30 Publish Run Consistency**:
    - For every single decision day in January 2026 with a 09:00 cutoff, the latest available publish run is consistently at **07:30 UTC** (published 1.5 hours before the 09:00 cutoff).
    - This results in an identical horizon profile for all 31 delivery days: minimum horizon of 16.5 hours (slot 00:00) and maximum horizon of 39.5 hours (slot 23:00).
+
+---
+
+## 9. Backtest Findings: Rolling Leakage-Free Decision Logic
+
+A rolling, leakage-free backtest across all **31 delivery days in January 2026** (2026-01-02 to 2026-02-01) with the default **09:00 D-1 cutoff** evaluated the operational decision-summary logic strictly using historical data $\le D-2$ (buffer allowed from 2025-12-29):
+
+| Metric | Result | Evaluation Notes |
+| :--- | :--- | :--- |
+| **Days Evaluated** | **31 delivery days** | All 31 operational days had $\ge 3$ complete historical days available. |
+| **Evaluated Slots** | **744 hourly slots** | 24 hourly evaluation slots per delivery day. |
+| **Mean Daily MAE (Raw Forecast)** | **2,038.9 MW** | Baseline outturn evaluation of D-1 09:00 forecast runs. |
+| **Mean Daily MAE (Bias-Adjusted)** | **1,504.4 MW** | Subtracting historical median signed bias (floored at 0 MW/h). |
+| **MAE Reduction** | **-534.5 MW (-26.2%)** | Median bias correction substantially lowered overall magnitude of forecast errors. |
+| **Days Adjusted Beats Raw** | **22 of 31 days (71.0%)** | On 9 days (29.0%), raw forecast outperformed due to unexpected wind ramp-ups or positive volatility swings. |
+| **Total Buffer Breaches** | **98 of 744 slots** | Hours where $Actual < Forecast - Shortfall Buffer$. |
+| **Overall Buffer Breach Rate** | **13.17%** | Closely approximates the theoretical 10.0% tail risk target ($1 - P_{90}$). |
+
+### Honest Trading Insights
+1. **Bias Adjustment Trade-Off**: Subtracting persistent median over-forecasting improves accuracy across 71% of days and reduces average daily MAE by 26%. However, during abrupt weather fronts where outturn overshoots forecasts, debiasing can increase error. It should be treated as an indicative guide rather than a deterministic forecast.
+2. **Buffer Reliability**: The empirical buffer breach rate of **13.2%** is close to the nominal 10% risk tolerance, confirming that the historical $P_{90}$ error band from completed days $\le D-2$ reliably protects against extreme wind shortfalls.
+

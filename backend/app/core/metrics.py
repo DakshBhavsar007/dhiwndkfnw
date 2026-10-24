@@ -16,7 +16,7 @@ Core Assumptions & Conventions:
   (forecast - actual), characterizing tail forecast errors.
 """
 
-from typing import Dict, Union, Tuple, Optional
+from typing import Dict, Union, Tuple
 import numpy as np
 import pandas as pd
 

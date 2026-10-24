@@ -129,3 +129,53 @@ export interface ErrorBandResponse {
   band: ErrorBandSlot[] | null;
   reason: string | null;
 }
+
+export interface DecisionSummaryResponse {
+  delivery_date: string;
+  cutoff_time: string;
+  expected_wind_mwh: number;
+  shortfall_buffer_mw: number | null;
+  shortfall_buffer_relative_to_adjusted_mw: number | null;
+  typical_offset_mw: number | null;
+  bias_adjusted_expected_wind_mwh: number | null;
+  risk_hours: number[];
+  low_confidence: boolean;
+  history_days_used: number;
+  history_start_date: string | null;
+  history_end_date: string | null;
+  recommendation: string;
+  assumption: string;
+  reason: string | null;
+}
+
+export interface BacktestDailyItem {
+  delivery_date: string;
+  history_days_used: number;
+  typical_offset_mw: number;
+  shortfall_buffer_mw: number;
+  mae_raw: number;
+  mae_adjusted: number;
+  adjusted_beats_raw: boolean;
+  breach_count: number;
+  slot_count: number;
+  breach_rate: number;
+}
+
+export interface BacktestSummary {
+  days_evaluated: number;
+  mean_mae_raw: number;
+  mean_mae_adjusted: number;
+  days_adjusted_beats_raw: number;
+  days_adjusted_beats_raw_pct: number;
+  total_breaches: number;
+  total_slots: number;
+  overall_breach_rate: number;
+}
+
+export interface BacktestResponse {
+  cutoff_time: string;
+  summary: BacktestSummary;
+  daily: BacktestDailyItem[];
+}
+
+

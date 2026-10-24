@@ -1,7 +1,5 @@
 """Unit tests for forecast selection logic, cutoff filtering, and DST handling."""
 
-import datetime
-import numpy as np
 import pandas as pd
 import pytest
 from pathlib import Path
@@ -60,7 +58,6 @@ def test_cutoff_exact_match_included():
 
 def test_publish_time_after_cutoff_excluded():
     """A forecast published 1 minute after cutoff (e.g. 09:01:00) MUST be excluded."""
-    cutoff_ts = pd.Timestamp("2026-01-01 09:00:00+00:00")
     one_min_after = pd.Timestamp("2026-01-01 09:01:00+00:00")
     earlier_ts = pd.Timestamp("2026-01-01 07:30:00+00:00")
     slot = pd.Timestamp("2026-01-02 12:00:00+00:00")

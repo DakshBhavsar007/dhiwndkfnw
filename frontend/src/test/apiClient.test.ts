@@ -92,6 +92,70 @@ describe('apiClient', () => {
     expect(result).toEqual(mockResponse);
   });
 
+  it('getDecisionSummary calls /api/decision-summary with date and cutoff', async () => {
+    const mockResponse = {
+      delivery_date: '2026-01-10',
+      cutoff_time: '09:00',
+      expected_wind_mwh: 245000.0,
+      shortfall_buffer_mw: 1420.0,
+      typical_offset_mw: 340.0,
+      bias_adjusted_expected_wind_mwh: 236840.0,
+      risk_hours: [18, 19, 20],
+      low_confidence: false,
+      history_days_used: 11,
+      history_start_date: '2025-12-29',
+      history_end_date: '2026-01-08',
+      recommendation: 'Sample recommendation text.',
+      assumption: 'Hourly MW is average power.',
+      reason: null,
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockResponse,
+    });
+    globalThis.fetch = fetchMock;
+
+    const result = await apiClient.getDecisionSummary('2026-01-10', '09:00');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const calledUrl = fetchMock.mock.calls[0][0];
+    expect(calledUrl).toContain('/api/decision-summary');
+    expect(calledUrl).toContain('date=2026-01-10');
+    expect(calledUrl).toContain('cutoff=09%3A00');
+    expect(result).toEqual(mockResponse);
+  });
+
+  it('getBacktest calls /api/backtest with cutoff parameter', async () => {
+    const mockResponse = {
+      cutoff_time: '09:00',
+      summary: {
+        days_evaluated: 31,
+        mean_mae_raw: 2038.9,
+        days_adjusted_beats_raw: 22,
+        days_adjusted_beats_raw_pct: 70.97,
+        overall_breach_rate: 0.1317,
+        total_breaches: 98,
+        total_slots: 744,
+      },
+      daily: [],
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockResponse,
+    });
+    globalThis.fetch = fetchMock;
+
+    const result = await apiClient.getBacktest('09:00');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const calledUrl = fetchMock.mock.calls[0][0];
+    expect(calledUrl).toContain('/api/backtest');
+    expect(calledUrl).toContain('cutoff=09%3A00');
+    expect(result).toEqual(mockResponse);
+  });
+
   it('handles HTTP error responses and extracts detail message', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,

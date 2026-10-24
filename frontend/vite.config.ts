@@ -24,5 +24,6 @@ export default defineConfig({
     setupFiles: './src/test/setup.ts',
     fileParallelism: false,
     isolate: false,
+    pool: 'threads',
   },
 })

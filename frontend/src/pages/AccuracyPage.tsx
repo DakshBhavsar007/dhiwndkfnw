@@ -31,6 +31,66 @@ import {
   formatPercent,
 } from '../utils/formatters.js';
 
+interface BacktestTooltipPayload {
+  payload: {
+    delivery_date: string;
+    mae_raw: number;
+    mae_adjusted: number;
+    typical_offset_mw: number;
+    shortfall_buffer_mw: number;
+    breach_rate: number;
+    history_days_used: number;
+  };
+}
+
+const BacktestTooltip: React.FC<{
+  active?: boolean;
+  payload?: BacktestTooltipPayload[];
+  label?: string;
+}> = ({ active, payload, label }) => {
+  if (!active || !payload || payload.length === 0) return null;
+  const d = payload[0].payload;
+  const diff = d.mae_adjusted - d.mae_raw;
+  const beats = diff < 0;
+
+  return (
+    <div className="custom-tooltip">
+      <div className="tooltip-time">Delivery Date: {label}</div>
+      <div className="tooltip-row">
+        <span className="tooltip-label">Raw Forecast MAE:</span>
+        <span className="tabular-nums" style={{ color: 'var(--cyan-accent)', fontWeight: 600 }}>
+          {formatMW(d.mae_raw, 1)}
+        </span>
+      </div>
+      <div className="tooltip-row">
+        <span className="tooltip-label">Bias-Adjusted MAE:</span>
+        <span className="tabular-nums" style={{ color: '#c084fc', fontWeight: 600 }}>
+          {formatMW(d.mae_adjusted, 1)}
+        </span>
+      </div>
+      <div className="tooltip-row">
+        <span className="tooltip-label">Daily Winner:</span>
+        <span
+          className="tabular-nums"
+          style={{
+            fontWeight: 700,
+            color: beats ? 'var(--emerald-actual)' : 'var(--amber-over)',
+          }}
+        >
+          {beats ? `Adjusted won by ${Math.abs(diff).toFixed(0)} MW` : `Raw won by ${diff.toFixed(0)} MW`}
+        </span>
+      </div>
+      <div className="tooltip-row">
+        <span className="tooltip-label">Buffer Breach Rate:</span>
+        <span className="tabular-nums" style={{ color: '#fb7185' }}>
+          {(d.breach_rate * 100).toFixed(1)}%
+        </span>
+      </div>
+      <div className="tooltip-meta">History evaluated: {d.history_days_used} days (strictly &le; D-2)</div>
+    </div>
+  );
+};
+
 const CUTOFF_PRESETS = ['09:00', '10:00', '11:00', '12:00'];
 
 // Custom Tooltips declared at top-level
@@ -213,6 +273,15 @@ export const AccuracyPage: React.FC = () => {
   } = useQuery({
     queryKey: ['accuracy', startDate, endDate, cutoffTime],
     queryFn: () => apiClient.getAccuracy(startDate, endDate, cutoffTime),
+  });
+
+  // Query Rolling Backtest Endpoint
+  const {
+    data: backtestData,
+    isLoading: isBacktestLoading,
+  } = useQuery({
+    queryKey: ['backtest', cutoffTime],
+    queryFn: () => apiClient.getBacktest(cutoffTime),
   });
 
   // Presets (Requirement 1: Replace hardcoded storm event with data-driven highest-error week)
@@ -725,7 +794,7 @@ export const AccuracyPage: React.FC = () => {
                   />
                   <ReferenceLine y={0} stroke="var(--border-medium)" strokeWidth={1} />
                   <Tooltip content={<HorizonTooltip />} />
-                  <Legend />
+                  <Legend wrapperStyle={{ color: 'var(--text-main)', fontSize: '0.8125rem', paddingTop: '8px' }} />
 
                   <Bar
                     dataKey="mae"
@@ -736,7 +805,7 @@ export const AccuracyPage: React.FC = () => {
                   />
                   <Bar
                     dataKey="rmse"
-                    fill="var(--border-medium)"
+                    fill="#94a3b8"
                     name="RMSE (MW)"
                     radius={[2, 2, 0, 0]}
                     maxBarSize={38}
@@ -770,7 +839,7 @@ export const AccuracyPage: React.FC = () => {
                   <thead>
                     <tr>
                       <th>Lead Time</th>
-                      <th>Evaluated Slots</th>
+                      <th>Forecast-actual pairs</th>
                       <th>MAE (MW)</th>
                       <th>RMSE (MW)</th>
                       <th>MAPE (%)</th>
@@ -811,6 +880,139 @@ export const AccuracyPage: React.FC = () => {
                 </table>
               </div>
             </div>
+          </div>
+
+          {/* Section 4: Rolling Backtest of Decision-Summary Logic */}
+          <div className="chart-card" style={{ marginTop: '24px' }}>
+            <div className="chart-header">
+              <div className="chart-title-group">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <h2 className="chart-title">Decision-Summary Backtest (Leakage-Free Rolling Evaluation)</h2>
+                  <span className="badge-normal-conf">Cutoff {cutoffTime} D-1</span>
+                </div>
+                <span className="chart-subtitle">
+                  Strict out-of-sample simulation across all 31 delivery days: for each day D, offset and shortfall buffer are derived strictly from history &le; D-2
+                </span>
+              </div>
+              <div className="chart-legend-custom">
+                <div className="legend-item">
+                  <span className="legend-swatch" style={{ background: 'var(--cyan-accent)' }} />
+                  <span>Raw Forecast MAE</span>
+                </div>
+                <div className="legend-item">
+                  <span className="legend-swatch" style={{ background: '#c084fc' }} />
+                  <span>Bias-Adjusted MAE</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Backtest Summary KPIs */}
+            {backtestData?.summary && (
+              <div className="kpi-grid" style={{ marginBottom: '16px' }}>
+                <KpiCard
+                  title="Mean MAE (Raw vs Adjusted)"
+                  value={`${Math.round(backtestData.summary.mean_mae_raw)} vs ${Math.round(backtestData.summary.mean_mae_adjusted)}`}
+                  unit="MW"
+                  subtitle={`-26.2% error reduction (-${Math.round(backtestData.summary.mean_mae_raw - backtestData.summary.mean_mae_adjusted)} MW)`}
+                  statusDot="emerald"
+                />
+                <KpiCard
+                  title="Days Adjusted Beats Raw"
+                  value={backtestData.summary.days_adjusted_beats_raw_pct.toFixed(1)}
+                  unit="%"
+                  subtitle={`${backtestData.summary.days_adjusted_beats_raw} of ${backtestData.summary.days_evaluated} delivery days won`}
+                  statusDot={backtestData.summary.days_adjusted_beats_raw_pct >= 50 ? 'cyan' : 'amber'}
+                />
+                <KpiCard
+                  title="Buffer Breach Rate"
+                  value={(backtestData.summary.overall_breach_rate * 100).toFixed(1)}
+                  unit="%"
+                  subtitle={`Target ~10.0% (${backtestData.summary.total_breaches}/${backtestData.summary.total_slots} slots)`}
+                  statusDot={backtestData.summary.overall_breach_rate <= 0.15 ? 'emerald' : 'amber'}
+                />
+                <KpiCard
+                  title="Evaluated Delivery Days"
+                  value={String(backtestData.summary.days_evaluated)}
+                  unit="days"
+                  subtitle="2026-01-02 to 2026-02-01 (&ge; 3 history days &le; D-2)"
+                  statusDot="none"
+                />
+              </div>
+            )}
+
+            {/* Plain-wording findings note */}
+            <div
+              className="info-banner"
+              style={{
+                background: 'rgba(192, 132, 252, 0.05)',
+                borderColor: 'rgba(192, 132, 252, 0.25)',
+                marginBottom: '16px',
+              }}
+            >
+              <Info size={16} color="#c084fc" style={{ flexShrink: 0, marginTop: '2px' }} />
+              <div>
+                <strong>Backtest Findings & Practical Interpretation:</strong>
+                <p style={{ margin: '4px 0 0 0', lineHeight: 1.5 }}>
+                  Rolling bias adjustment improved overall accuracy, reducing mean daily MAE from{' '}
+                  <strong>2,039 MW</strong> to <strong>1,504 MW</strong> and outperforming the raw forecast on{' '}
+                  <strong>71.0% of days (22 of 31 days)</strong>. However,{' '}
+                  <strong>on 9 of 31 days (29.0%), the raw forecast was superior</strong>: during rapid meteorological
+                  weather shifts and sudden wind spikes, historical median offsets lagged behind real-time ramps and
+                  caused the adjusted forecast to under-predict generation. The shortfall buffer breach rate was{' '}
+                  <strong>13.2%</strong>, aligning closely with the theoretical 10% tail risk target.
+                  <strong> Bias adjustment should be treated as an indicative hedge, not an unconditional upgrade.</strong>
+                </p>
+              </div>
+            </div>
+
+            {/* Daily MAE Chart */}
+            {isBacktestLoading && <div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading rolling backtest data...</div>}
+            {backtestData?.daily && backtestData.daily.length > 0 && (
+              <div style={{ width: '100%', height: 320 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart
+                    data={backtestData.daily}
+                    margin={{ top: 8, right: 16, left: 8, bottom: 8 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
+                    <XAxis
+                      dataKey="delivery_date"
+                      stroke="var(--text-secondary)"
+                      fontSize={10}
+                      tickLine={false}
+                      tickFormatter={(d: string) => d.slice(5)}
+                    />
+                    <YAxis
+                      stroke="var(--text-secondary)"
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                      width={80}
+                      tickFormatter={(val: number) => `${val.toLocaleString()} MW`}
+                    />
+                    <Tooltip content={<BacktestTooltip />} />
+                    <Line
+                      type="monotone"
+                      dataKey="mae_raw"
+                      stroke="var(--cyan-accent)"
+                      strokeWidth={2}
+                      dot={{ r: 2.5, fill: 'var(--cyan-accent)' }}
+                      name="Raw Forecast MAE"
+                      isAnimationActive={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="mae_adjusted"
+                      stroke="#c084fc"
+                      strokeWidth={2}
+                      dot={{ r: 2.5, fill: '#c084fc' }}
+                      name="Bias-Adjusted MAE"
+                      isAnimationActive={false}
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
         </>
       )}

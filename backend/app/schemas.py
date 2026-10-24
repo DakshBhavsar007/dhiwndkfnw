@@ -140,3 +140,83 @@ class ErrorBandResponse(BaseModel):
     history_end_date: Optional[str] = Field(None, description="Latest historical delivery day used (<= D-2)")
     band: Optional[List[ErrorBandSlot]] = Field(None, description="Hourly forecast with lower and upper error bands")
     reason: Optional[str] = Field(None, description="Reason if band is null (e.g. fewer than 3 history days)")
+
+
+class DecisionSummaryResponse(BaseModel):
+    delivery_date: str = Field(..., description="Target delivery date (YYYY-MM-DD)")
+    cutoff_time: str = Field(..., description="Decision cutoff time on D-1")
+    expected_wind_mwh: float = Field(..., description="Sum of hourly forecast MW * 1h across the delivery day")
+    shortfall_buffer_mw: Optional[float] = Field(
+        None,
+        description="P90 of historical signed error (forecast - actual) from leak-free history, floored at 0",
+    )
+    shortfall_buffer_relative_to_adjusted_mw: Optional[float] = Field(
+        None,
+        description="Buffer relative to bias-adjusted forecast = P90 error - median error in MW",
+    )
+    typical_offset_mw: Optional[float] = Field(
+        None,
+        description="Median of historical signed error (persistent bias)",
+    )
+    bias_adjusted_expected_wind_mwh: Optional[float] = Field(
+        None,
+        description="Forecast minus typical offset floored at 0 per hour, summed across the day",
+    )
+    risk_hours: List[int] = Field(
+        default_factory=list,
+        description="Top 3 local hours (0-23) with highest historical hour-of-day mean over-forecast, sorted ascending",
+    )
+    low_confidence: bool = Field(
+        False,
+        description="True if history_days_used < 7",
+    )
+    history_days_used: int = Field(
+        ...,
+        description="Number of complete historical delivery days used (strictly <= D-2)",
+    )
+    history_start_date: Optional[str] = Field(None, description="Earliest historical delivery day used")
+    history_end_date: Optional[str] = Field(None, description="Latest historical delivery day used (<= D-2)")
+    recommendation: str = Field(
+        ...,
+        description="Plain-English decision recommendation text built from computed data",
+    )
+    assumption: str = Field(
+        "Forecast generation (MW) is assumed to represent an hourly average power over each 1-hour interval [startTime, startTime + 1h), so 1 MW for 1 hour equates to 1 MWh.",
+        description="Assumptions regarding generation metric and energy conversion",
+    )
+    reason: Optional[str] = Field(
+        None,
+        description="Reason if historical buffer fields are null (e.g. fewer than 3 history days)",
+    )
+
+
+class BacktestDailyItem(BaseModel):
+    delivery_date: str = Field(..., description="Target delivery date (YYYY-MM-DD)")
+    history_days_used: int = Field(..., description="Complete historical days used (strictly <= D-2)")
+    typical_offset_mw: float = Field(..., description="Median error from history in MW")
+    shortfall_buffer_mw: float = Field(..., description="P90 historical error floored at 0 in MW")
+    mae_raw: float = Field(..., description="MAE of raw forecast on delivery day D in MW")
+    mae_adjusted: float = Field(..., description="MAE of bias-adjusted forecast on delivery day D in MW")
+    adjusted_beats_raw: bool = Field(..., description="True if mae_adjusted < mae_raw")
+    breach_count: int = Field(..., description="Number of hours where actual < forecast - buffer")
+    slot_count: int = Field(..., description="Number of evaluated hourly slots on day D")
+    breach_rate: float = Field(..., description="Fraction of hours where actual < forecast - buffer")
+
+
+class BacktestSummary(BaseModel):
+    days_evaluated: int = Field(..., description="Number of delivery days with >= 3 history days evaluated")
+    mean_mae_raw: float = Field(..., description="Mean MAE of raw forecast across evaluated days in MW")
+    mean_mae_adjusted: float = Field(..., description="Mean MAE of bias-adjusted forecast across evaluated days in MW")
+    days_adjusted_beats_raw: int = Field(..., description="Count of days where bias-adjusted MAE < raw MAE")
+    days_adjusted_beats_raw_pct: float = Field(..., description="Percentage of days where bias-adjusted MAE < raw MAE")
+    total_breaches: int = Field(..., description="Total hours across all days where actual < forecast - buffer")
+    total_slots: int = Field(..., description="Total evaluated hourly slots")
+    overall_breach_rate: float = Field(..., description="Overall buffer breach rate (target ~10%)")
+
+
+class BacktestResponse(BaseModel):
+    cutoff_time: str = Field(..., description="Decision cutoff time used")
+    summary: BacktestSummary = Field(..., description="Summary statistics across all evaluated delivery days")
+    daily: List[BacktestDailyItem] = Field(..., description="Per-delivery-day backtest evaluation results")
+
+

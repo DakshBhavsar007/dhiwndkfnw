@@ -47,6 +47,7 @@ interface TooltipPayloadItem {
     actual30m: number;
     actualHourly: number | null;
     forecast: number | null;
+    forecastMinusBuffer: number | null;
     error: number | null;
     publishTime: string | null;
     horizonHours: number | null;
@@ -60,7 +61,8 @@ const CustomChartTooltip: React.FC<{
   payload?: TooltipPayloadItem[];
   label?: string;
   showErrorBand?: boolean;
-}> = ({ active, payload, label, showErrorBand = true }) => {
+  showShortfallLine?: boolean;
+}> = ({ active, payload, label, showErrorBand = true, showShortfallLine = true }) => {
   if (!active || !payload || payload.length === 0) return null;
   const data = payload[0]?.payload;
   if (!data) return null;
@@ -79,6 +81,17 @@ const CustomChartTooltip: React.FC<{
           {formatMW(data.forecast)}
         </span>
       </div>
+      {showShortfallLine && data.forecastMinusBuffer !== null && (
+        <div className="tooltip-row">
+          <span className="tooltip-label">
+            <span className="tooltip-dot" style={{ backgroundColor: '#fb7185' }} />
+            Forecast − P90 Buffer:
+          </span>
+          <span className="tabular-nums" style={{ fontWeight: 600, color: '#fb7185' }}>
+            {formatMW(data.forecastMinusBuffer)}
+          </span>
+        </div>
+      )}
       <div className="tooltip-row">
         <span className="tooltip-label">
           <span className="tooltip-dot" style={{ backgroundColor: 'var(--emerald-actual)' }} />
@@ -152,6 +165,7 @@ export const ForecastPage: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState<string>('2026-01-05');
   const [cutoffTime, setCutoffTime] = useState<string>('09:00');
   const [showErrorBand, setShowErrorBand] = useState<boolean>(true);
+  const [showShortfallLine, setShowShortfallLine] = useState<boolean>(true);
   const [showTable, setShowTable] = useState<boolean>(false);
 
   // Queries
@@ -170,6 +184,11 @@ export const ForecastPage: React.FC = () => {
     queryKey: ['error-band', selectedDate, cutoffTime],
     queryFn: () => apiClient.getErrorBand(selectedDate, cutoffTime),
     enabled: showErrorBand,
+  });
+
+  const { data: decisionSummary } = useQuery({
+    queryKey: ['decision-summary', selectedDate, cutoffTime],
+    queryFn: () => apiClient.getDecisionSummary(selectedDate, cutoffTime),
   });
 
   // Date Navigation handlers
@@ -231,6 +250,8 @@ export const ForecastPage: React.FC = () => {
       });
     }
 
+    const shortfallBufferVal = decisionSummary?.shortfall_buffer_mw;
+
     // Iterate through all 30-minute settlement periods
     return forecastData.raw_actuals_30min.map((actual30) => {
       const timeLabel = formatLondonTime(actual30.startTime, 'time');
@@ -241,6 +262,10 @@ export const ForecastPage: React.FC = () => {
       const forecastVal = hourlySlot?.forecast ?? null;
       const lowerVal = bandSlot ? bandSlot.lower_bound : null;
       const upperVal = bandSlot ? bandSlot.upper_bound : null;
+      const forecastMinusBuffer =
+        shortfallBufferVal !== null && shortfallBufferVal !== undefined && forecastVal !== null
+          ? Math.max(0, forecastVal - shortfallBufferVal)
+          : null;
 
       return {
         time: timeLabel,
@@ -248,6 +273,7 @@ export const ForecastPage: React.FC = () => {
         actual30m: actual30.generation,
         actualHourly: hourlySlot?.actual ?? null,
         forecast: forecastVal,
+        forecastMinusBuffer,
         error: hourlySlot?.error ?? null,
         publishTime: hourlySlot?.publishTime ?? null,
         horizonHours: hourlySlot?.horizon_hours ?? null,
@@ -256,7 +282,7 @@ export const ForecastPage: React.FC = () => {
         bandRange: lowerVal !== null && upperVal !== null ? [lowerVal, upperVal] : null,
       };
     });
-  }, [forecastData, errorBandData]);
+  }, [forecastData, errorBandData, decisionSummary]);
 
   // Formatted KPI parts with small muted units
   const maeParts = formatMWParts(forecastData?.summary_metrics.mae, 1);
@@ -374,6 +400,20 @@ export const ForecastPage: React.FC = () => {
             </div>
           </div>
 
+          {/* Shortfall Buffer Toggle */}
+          <div className="control-group">
+            <span className="control-label">Shortfall Buffer</span>
+            <label className="toggle-label">
+              <input
+                type="checkbox"
+                className="toggle-checkbox"
+                checked={showShortfallLine}
+                onChange={(e) => setShowShortfallLine(e.target.checked)}
+              />
+              <span>Forecast − P90</span>
+            </label>
+          </div>
+
           {/* Error Band Toggle */}
           <div className="control-group" style={{ marginLeft: 'auto' }}>
             <span className="control-label">Historical Error Band</span>
@@ -482,6 +522,134 @@ export const ForecastPage: React.FC = () => {
             />
           </div>
 
+          {/* Decision Summary Panel */}
+          {decisionSummary && (
+            <div className="decision-panel">
+              <div className="decision-header">
+                <div className="decision-title-group">
+                  <h2 className="decision-title">Day-Ahead Decision Summary</h2>
+                  {decisionSummary.low_confidence ? (
+                    <span className="badge-low-conf">Low Confidence (&lt; 7 Days History)</span>
+                  ) : (
+                    <span className="badge-normal-conf">
+                      {decisionSummary.history_days_used} Days History
+                    </span>
+                  )}
+                </div>
+                <div className="decision-meta">
+                  {decisionSummary.history_days_used >= 3 ? (
+                    <span>
+                      Historical buffer strictly uses complete days &le; D-2 ({decisionSummary.history_start_date} to {decisionSummary.history_end_date})
+                    </span>
+                  ) : (
+                    <span>{decisionSummary.reason || 'Insufficient historical data (< 3 days)'}</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="decision-grid">
+                <div className="decision-card">
+                  <div className="decision-card-label">Expected Wind (Raw)</div>
+                  <div className="decision-card-value tabular-nums">
+                    {(Math.round(decisionSummary.expected_wind_mwh / 10) * 10).toLocaleString()}
+                    <span className="decision-card-unit">MWh</span>
+                  </div>
+                  <div className="decision-card-sub">
+                    Sum of 24h forecast MW (assumes hourly MW is an hourly average)
+                  </div>
+                </div>
+
+                <div className="decision-card">
+                  <div className="decision-card-label">Expected Wind (Bias-Adjusted)</div>
+                  <div className="decision-card-value tabular-nums">
+                    {decisionSummary.bias_adjusted_expected_wind_mwh !== null
+                      ? (Math.round(decisionSummary.bias_adjusted_expected_wind_mwh / 10) * 10).toLocaleString()
+                      : 'N/A'}
+                    {decisionSummary.bias_adjusted_expected_wind_mwh !== null && (
+                      <span className="decision-card-unit">MWh</span>
+                    )}
+                  </div>
+                  <div className="decision-card-sub">
+                    Forecast minus typical offset floored at 0/h (estimate depends on offset persisting)
+                  </div>
+                </div>
+
+                <div className="decision-card">
+                  <div className="decision-card-label">Shortfall Buffer (P90)</div>
+                  <div className="decision-card-value tabular-nums" style={{ color: '#fb7185' }}>
+                    {decisionSummary.shortfall_buffer_mw !== null
+                      ? (Math.round(decisionSummary.shortfall_buffer_mw / 10) * 10).toLocaleString()
+                      : 'N/A'}
+                    {decisionSummary.shortfall_buffer_mw !== null && (
+                      <span className="decision-card-unit">MW (raw)</span>
+                    )}
+                  </div>
+                  {decisionSummary.shortfall_buffer_relative_to_adjusted_mw !== null && (
+                    <div
+                      className="tabular-nums"
+                      style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '2px' }}
+                    >
+                      vs. adjusted: <strong>{(Math.round(decisionSummary.shortfall_buffer_relative_to_adjusted_mw / 10) * 10).toLocaleString()} MW</strong> (P90 − median)
+                    </div>
+                  )}
+                  <div className="decision-card-sub" style={{ marginTop: '4px' }}>
+                    Per-hour MW, not a daily total (~90% confidence actual wind won&apos;t be more than this below forecast)
+                  </div>
+                </div>
+
+                <div className="decision-card">
+                  <div className="decision-card-label">Typical Offset (Median Bias)</div>
+                  <div
+                    className="decision-card-value tabular-nums"
+                    style={{
+                      color:
+                        (decisionSummary.typical_offset_mw ?? 0) >= 0
+                          ? 'var(--amber-over)'
+                          : 'var(--rose-under)',
+                    }}
+                  >
+                    {decisionSummary.typical_offset_mw !== null
+                      ? `${decisionSummary.typical_offset_mw >= 0 ? '+' : ''}${(
+                          Math.round(decisionSummary.typical_offset_mw / 10) * 10
+                        ).toLocaleString()}`
+                      : 'N/A'}
+                    {decisionSummary.typical_offset_mw !== null && (
+                      <span className="decision-card-unit">MW</span>
+                    )}
+                  </div>
+                  <div className="decision-card-sub">
+                    Persistent signed error across {decisionSummary.history_days_used} completed days
+                  </div>
+                </div>
+
+                <div className="decision-card">
+                  <div className="decision-card-label">Peak Risk Hours</div>
+                  <div className="decision-risk-badges">
+                    {decisionSummary.risk_hours && decisionSummary.risk_hours.length > 0 ? (
+                      [...decisionSummary.risk_hours]
+                        .sort((a, b) => a - b)
+                        .map((h) => (
+                          <span key={h} className="risk-badge">
+                            {String(h).padStart(2, '0')}:00
+                          </span>
+                        ))
+                    ) : (
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>None</span>
+                    )}
+                  </div>
+                  <div className="decision-card-sub" style={{ marginTop: '6px' }}>
+                    Indicative, {decisionSummary.history_days_used} days history (top over-forecast hours)
+                  </div>
+                </div>
+              </div>
+
+              <div className="decision-recommendation">
+                <strong>Trading Recommendation: </strong>
+                {decisionSummary.recommendation}
+              </div>
+            </div>
+          )}
+
           {/* Interactive Chart */}
           <div className="chart-card">
             <div className="chart-header">
@@ -500,6 +668,22 @@ export const ForecastPage: React.FC = () => {
                   <span className="legend-swatch forecast" />
                   <span>Forecast Step (Hourly WINDFOR)</span>
                 </div>
+                {decisionSummary?.shortfall_buffer_mw !== null && (
+                  <div
+                    className="legend-item"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setShowShortfallLine((v) => !v)}
+                    title="Toggle dashed shortfall line on chart"
+                  >
+                    <span
+                      className="legend-swatch buffer-line"
+                      style={{ opacity: showShortfallLine ? 1 : 0.3 }}
+                    />
+                    <span style={{ color: showShortfallLine ? 'var(--text-main)' : 'var(--text-muted)' }}>
+                      Forecast − P90 Buffer
+                    </span>
+                  </div>
+                )}
                 {showErrorBand && errorBandData?.band && (
                   <div className="legend-item">
                     <span className="legend-swatch band" />
@@ -537,7 +721,12 @@ export const ForecastPage: React.FC = () => {
                     domain={[0, 'auto']}
                   />
                   <Tooltip
-                    content={<CustomChartTooltip showErrorBand={showErrorBand} />}
+                    content={
+                      <CustomChartTooltip
+                        showErrorBand={showErrorBand}
+                        showShortfallLine={showShortfallLine}
+                      />
+                    }
                   />
 
                   {/* Shaded Area between lower and upper error bounds */}
@@ -577,6 +766,21 @@ export const ForecastPage: React.FC = () => {
                     name="Forecast (Hourly)"
                     isAnimationActive={false}
                   />
+
+                  {/* Optional Shortfall Buffer Line: Forecast minus P90 buffer */}
+                  {showShortfallLine && decisionSummary?.shortfall_buffer_mw !== null && (
+                    <Line
+                      type="stepAfter"
+                      dataKey="forecastMinusBuffer"
+                      stroke="#fb7185"
+                      strokeWidth={1.5}
+                      strokeDasharray="4 4"
+                      dot={false}
+                      activeDot={{ r: 4, fill: '#fb7185', stroke: '#fff' }}
+                      name="Forecast − P90 Buffer"
+                      isAnimationActive={false}
+                    />
+                  )}
 
                   {/* Interactive brush / zoom */}
                   <Brush
