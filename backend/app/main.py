@@ -102,6 +102,23 @@ app.add_middleware(RequestLoggingMiddleware)
 
 
 @app.get(
+    "/",
+    summary="Root service status",
+    tags=["System"],
+)
+def root():
+    """Return basic service information and link to documentation."""
+    return {
+        "status": "ok",
+        "service": "Wind-Power Forecast Monitoring API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health",
+        "meta": "/api/meta",
+    }
+
+
+@app.get(
     "/health",
     response_model=HealthResponse,
     summary="Health check",
@@ -109,6 +126,11 @@ app.add_middleware(RequestLoggingMiddleware)
 )
 def get_health() -> HealthResponse:
     """Check service health and parquet snapshot memory state."""
+    if not data_loader.is_loaded:
+        try:
+            data_loader.load_data()
+        except Exception as exc:
+            logger.error("Lazy load failed in /health: %s", exc)
     return HealthResponse(
         status="ok",
         version="1.0.0",
