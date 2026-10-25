@@ -3,8 +3,27 @@
 from contextlib import asynccontextmanager
 import logging
 import os
+from pathlib import Path
+import sys
+import types
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+
+# Ensure 'backend' package alias exists if imported directly as 'app.main' (e.g. on Vercel)
+if "backend" not in sys.modules:
+    _app_dir = Path(__file__).resolve().parent
+    _backend_dir = _app_dir.parent
+    for _p in (_backend_dir, _backend_dir.parent):
+        _sp = str(_p)
+        if _sp not in sys.path:
+            sys.path.insert(0, _sp)
+    _backend_pkg = types.ModuleType("backend")
+    _backend_pkg.__path__ = [str(_backend_dir)]
+    sys.modules["backend"] = _backend_pkg
+    _curr_app = sys.modules.get("app")
+    if _curr_app:
+        _backend_pkg.app = _curr_app
+        sys.modules["backend.app"] = _curr_app
 
 from backend.app.data_loader import data_loader
 from backend.app.middleware import RequestLoggingMiddleware
@@ -79,6 +98,14 @@ API backend for UK Day-Ahead Electricity Market Wind Power Forecast Monitoring.
 """,
     lifespan=lifespan,
 )
+
+# In serverless environments (e.g. Vercel), lifespan may not be triggered.
+# Pre-load snapshots at import time if not already loaded.
+try:
+    if not data_loader.is_loaded:
+        data_loader.load_data()
+except Exception as _e:
+    logger.warning("Cold start data loading deferred: %s", _e)
 
 # CORS Middleware configuration driven by ALLOWED_ORIGINS / CORS_ORIGINS
 raw_origins = os.getenv("ALLOWED_ORIGINS") or os.getenv("CORS_ORIGINS") or "*"
