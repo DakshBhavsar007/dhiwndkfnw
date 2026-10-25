@@ -132,8 +132,8 @@ def test_error_band_numeric_hand_computed_example():
     - Actual generation: actual = forecast - error.
     - Given forecast = 1000.0 MW.
     - Given historical errors = [-200.0, -100.0, 0.0, 100.0, 200.0] MW.
-      * P10(error) = -160.0 MW (severe under-forecast, where actual was 1160.0).
-      * P90(error) = +160.0 MW (severe over-forecast, where actual was 840.0).
+      * P10(error) = -160.0 MW (under-forecast tail, where actual was 1160.0).
+      * P90(error) = +160.0 MW (over-forecast tail, where actual was 840.0).
     - Band for ACTUAL generation:
       * lower = max(0.0, forecast - P90(error)) = max(0.0, 1000.0 - 160.0) = 840.0 MW.
       * upper = max(0.0, forecast - P10(error)) = max(0.0, 1000.0 - (-160.0)) = 1160.0 MW.

@@ -284,7 +284,7 @@ export const AccuracyPage: React.FC = () => {
     queryFn: () => apiClient.getBacktest(cutoffTime),
   });
 
-  // Presets (Requirement 1: Replace hardcoded storm event with data-driven highest-error week)
+  // Presets (Data-driven highest-error week)
   const handlePreset = (start: string, end: string) => {
     setStartDate(start);
     setEndDate(end);
@@ -367,6 +367,14 @@ export const AccuracyPage: React.FC = () => {
       count: item.count,
     }));
   }, [accuracyData]);
+
+  // Dates where raw forecast won (adjusted_beats_raw is false)
+  const rawWonDates = useMemo(() => {
+    if (!backtestData?.daily) return [];
+    return backtestData.daily
+      .filter((d) => !d.adjusted_beats_raw)
+      .map((d) => d.delivery_date);
+  }, [backtestData]);
 
   // Formatted KPI Parts
   const maeParts = formatMWParts(accuracyData?.headline_metrics.mae, 1);
@@ -478,14 +486,16 @@ export const AccuracyPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Requirement 6: Visible note on Accuracy page about persistent bias */}
+      {/* Visible note on Accuracy page about persistent bias */}
       <div className="info-banner" style={{ background: 'rgba(56, 189, 248, 0.05)', borderColor: 'rgba(56, 189, 248, 0.2)' }}>
         <AlertCircle size={15} color="var(--cyan-accent)" style={{ flexShrink: 0, marginTop: '2px' }} />
         <div>
-          <strong>Market Bias Insight:</strong> Mean bias is large and nearly constant across hours and
-          horizons, indicating that a <strong>persistent offset (not timing error) dominates</strong> forecast
-          errors. Removing this level shift yields an error reduction from {maeParts.value} MW down to{' '}
-          <strong>{debiasedMaeParts.value} MW</strong> (debiased MAE).
+          <strong>Market Bias Insight:</strong> Mean bias is <strong>positive in every hour of the day and every horizon bucket</strong> (bias is larger overnight than in the afternoon), indicating that a persistent level offset dominates forecast errors.
+          <div style={{ marginTop: '6px', fontSize: '0.9em', lineHeight: 1.5 }}>
+            Debiasing impact from raw MAE ({maeParts.value} MW):{' '}
+            <strong>{debiasedMaeParts.value} MW</strong> (in-sample, uses hindsight of this window's own mean bias) vs.{' '}
+            <strong>{backtestData?.summary ? `${formatMW(backtestData.summary.mean_mae_adjusted)} MW` : '1,504 MW'}</strong> (achievable at decision time, from rolling leakage-free backtest using history &le; D-2).
+          </div>
         </div>
       </div>
 
@@ -557,7 +567,7 @@ export const AccuracyPage: React.FC = () => {
               title="Error P10 (under-forecast tail)"
               value={p10Parts.value}
               unit={p10Parts.unit}
-              subtitle="10th percentile of signed error (severe under-forecast)"
+              subtitle="10th percentile of signed error (under-forecast tail)"
               statusDot="rose"
             />
             <KpiCard
@@ -953,14 +963,20 @@ export const AccuracyPage: React.FC = () => {
               <div>
                 <strong>Backtest Findings & Practical Interpretation:</strong>
                 <p style={{ margin: '4px 0 0 0', lineHeight: 1.5 }}>
-                  Rolling bias adjustment improved overall accuracy, reducing mean daily MAE from{' '}
-                  <strong>2,039 MW</strong> to <strong>1,504 MW</strong> and outperforming the raw forecast on{' '}
-                  <strong>71.0% of days (22 of 31 days)</strong>. However,{' '}
-                  <strong>on 9 of 31 days (29.0%), the raw forecast was superior</strong>: during rapid meteorological
-                  weather shifts and sudden wind spikes, historical median offsets lagged behind real-time ramps and
-                  caused the adjusted forecast to under-predict generation. The shortfall buffer breach rate was{' '}
-                  <strong>13.2%</strong>, aligning closely with the theoretical 10% tail risk target.
-                  <strong> Bias adjustment should be treated as an indicative hedge, not an unconditional upgrade.</strong>
+                  Mean daily MAE: <strong>{backtestData?.summary ? `${formatMW(backtestData.summary.mean_mae_raw)} MW` : '2,038.9 MW'}</strong> (raw forecast) vs.{' '}
+                  <strong>{backtestData?.summary ? `${formatMW(backtestData.summary.mean_mae_adjusted)} MW` : '1,504.4 MW'}</strong> (bias-adjusted).{' '}
+                  The bias-adjusted forecast beat the raw forecast on{' '}
+                  <strong>
+                    {backtestData?.summary ? `${backtestData.summary.days_adjusted_beats_raw} of ${backtestData.summary.days_evaluated} days (${backtestData.summary.days_adjusted_beats_raw_pct.toFixed(1)}%)` : '22 of 31 days (71.0%)'}
+                  </strong>.
+                </p>
+                <p style={{ margin: '6px 0 0 0', lineHeight: 1.5 }}>
+                  On {rawWonDates.length > 0 ? `${rawWonDates.length} of ${backtestData?.summary?.days_evaluated ?? 31} days (${((rawWonDates.length / (backtestData?.summary?.days_evaluated ?? 31)) * 100).toFixed(1)}%)` : '9 days (29.0%)'}, the raw forecast was better
+                  {rawWonDates.length > 0 ? ` (${rawWonDates.join(', ')})` : ''}; reasons for the days where raw was better were not analysed.
+                </p>
+                <p style={{ margin: '6px 0 0 0', lineHeight: 1.5 }}>
+                  The P90 shortfall buffer was breached in{' '}
+                  <strong>{backtestData?.summary ? `${backtestData.summary.overall_breach_rate.toFixed(1)}%` : '13.2%'}</strong> of hours ({backtestData?.summary ? `${backtestData.summary.total_breaches} of ${backtestData.summary.total_slots}` : '98 of 744'}) vs. the 10% target, so it slightly under-covers.
                 </p>
               </div>
             </div>

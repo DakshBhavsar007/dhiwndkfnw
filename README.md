@@ -82,8 +82,8 @@ Access frontend at http://localhost:5173 (points to http://localhost:8000 via pr
 ## 9. Limitations and Future Work
 - Limited window: Only one calendar month of operational decisions was evaluated (January 2026); seasonal summer/winter variations remain unassessed.
 - Pooled vs. per-hour error bands: Historical error quantiles are currently pooled across all 24 hours rather than segmented by hour of day or horizon bucket.
-- Buffer breach rate: The observed 13.17% breach rate exceeded the 10.0% theoretical target, reflecting fat-tailed negative ramp events.
-- Bias adjustment limits: Rolling median bias adjustment beat raw forecasts on 71% of days but underperformed on 29% of days during positive ramp events. Reasons for raw outperformance were not individually analysed, and persistence is not guaranteed.
+- Buffer breach rate: The P90 shortfall buffer was breached in 13.17% of hours (98 of 744) against a 10% target, so it slightly under-covers. Only one month of data was available; treat it as a guide, not a guarantee.
+- Bias adjustment limits: The rolling median bias adjustment beat the raw forecast on 22 of 31 days (71.0%) and was worse on 9 days (29.0%). The reasons for those 9 days were not analysed, and the offset may not persist.
 - Absence of demand data: Without national demand and market price streams, net procurement volume and financial imbalance exposure cannot be calculated.
 - Next steps: Incorporate intraday forecast runs post-gate closure, per-hour quantile regression error bands, and plant-level availability signals.
 
