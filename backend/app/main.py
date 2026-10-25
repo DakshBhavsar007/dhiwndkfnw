@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 import logging
+import os
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -79,11 +80,19 @@ API backend for UK Day-Ahead Electricity Market Wind Power Forecast Monitoring.
     lifespan=lifespan,
 )
 
-# CORS Middleware
+# CORS Middleware configuration driven by ALLOWED_ORIGINS / CORS_ORIGINS
+raw_origins = os.getenv("ALLOWED_ORIGINS") or os.getenv("CORS_ORIGINS") or "*"
+if raw_origins.strip() == "*":
+    cors_origins = ["*"]
+    cors_credentials = False
+else:
+    cors_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    cors_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

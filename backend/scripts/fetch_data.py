@@ -198,6 +198,11 @@ def main() -> None:
         default="2026-02-03T23:59:59Z",
         help="End publish date for WINDFOR (ISO8601)",
     )
+    parser.add_argument(
+        "--convert-existing",
+        action="store_true",
+        help="Convert existing parquet snapshots to CSV.gz without fetching from Elexon.",
+    )
     args = parser.parse_args()
 
     out_path = Path(args.output_dir)
@@ -206,33 +211,57 @@ def main() -> None:
     session = get_http_session()
 
     # 1. Fetch FUELHH Actuals
-    actuals_df = fetch_fuelhh_actuals(
-        session=session,
-        start_date=args.fuelhh_start,
-        end_date=args.fuelhh_end,
-    )
-    actuals_file = out_path / "actuals.parquet"
-    actuals_df.to_parquet(actuals_file, index=False)
+    if args.convert_existing:
+        actuals_file = out_path / "actuals.parquet"
+        if not actuals_file.exists():
+            raise FileNotFoundError(f"Cannot convert: {actuals_file} not found.")
+        actuals_df = pd.read_parquet(actuals_file)
+        logger.info("Loaded %d existing actuals from %s", len(actuals_df), actuals_file)
+    else:
+        actuals_df = fetch_fuelhh_actuals(
+            session=session,
+            start_date=args.fuelhh_start,
+            end_date=args.fuelhh_end,
+        )
+        actuals_file = out_path / "actuals.parquet"
+        actuals_df.to_parquet(actuals_file, index=False)
+
+    # Save compact CSV.gz snapshot
+    actuals_csv = out_path / "actuals.csv.gz"
+    actuals_df.to_csv(actuals_csv, index=False, compression="gzip")
     logger.info(
-        "Saved %d actuals rows to %s (size: %.2f KB)",
+        "Saved %d actuals rows to %s (parquet: %.2f KB, csv.gz: %.2f KB)",
         len(actuals_df),
-        actuals_file,
+        out_path,
         actuals_file.stat().st_size / 1024,
+        actuals_csv.stat().st_size / 1024,
     )
 
     # 2. Fetch WINDFOR Forecasts
-    forecasts_df = fetch_windfor_forecasts(
-        session=session,
-        start_dt=args.windfor_start,
-        end_dt=args.windfor_end,
-    )
-    forecasts_file = out_path / "forecasts.parquet"
-    forecasts_df.to_parquet(forecasts_file, index=False)
+    if args.convert_existing:
+        forecasts_file = out_path / "forecasts.parquet"
+        if not forecasts_file.exists():
+            raise FileNotFoundError(f"Cannot convert: {forecasts_file} not found.")
+        forecasts_df = pd.read_parquet(forecasts_file)
+        logger.info("Loaded %d existing forecasts from %s", len(forecasts_df), forecasts_file)
+    else:
+        forecasts_df = fetch_windfor_forecasts(
+            session=session,
+            start_dt=args.windfor_start,
+            end_dt=args.windfor_end,
+        )
+        forecasts_file = out_path / "forecasts.parquet"
+        forecasts_df.to_parquet(forecasts_file, index=False)
+
+    # Save compact CSV.gz snapshot
+    forecasts_csv = out_path / "forecasts.csv.gz"
+    forecasts_df.to_csv(forecasts_csv, index=False, compression="gzip")
     logger.info(
-        "Saved %d forecasts rows to %s (size: %.2f KB)",
+        "Saved %d forecasts rows to %s (parquet: %.2f KB, csv.gz: %.2f KB)",
         len(forecasts_df),
-        forecasts_file,
+        out_path,
         forecasts_file.stat().st_size / 1024,
+        forecasts_csv.stat().st_size / 1024,
     )
 
 
