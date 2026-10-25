@@ -25,3 +25,10 @@ build/
 .env.local
 .vscode/
 .idea/
+
+
+.ruff_cache/
+.mypy_cache/
+*.tsbuildinfo
+.DS_Store
+.vercel/
