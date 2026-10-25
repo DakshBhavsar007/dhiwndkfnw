@@ -3,7 +3,6 @@
 from pathlib import Path
 import tempfile
 import pandas as pd
-import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.data_loader import DataLoader, data_loader

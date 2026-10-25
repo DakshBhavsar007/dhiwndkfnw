@@ -26,7 +26,10 @@ if "backend" not in sys.modules:
         sys.modules["backend.app"] = _curr_app
 
 from backend.app.data_loader import data_loader
-from backend.app.middleware import RequestLoggingMiddleware
+from backend.app.middleware import (
+    RequestLoggingMiddleware,
+    VercelPathCorrectionMiddleware,
+)
 from backend.app.schemas import (
     AccuracyResponse,
     BacktestResponse,
@@ -125,8 +128,6 @@ app.add_middleware(
 )
 
 # Path correction for serverless rewrites & Request logging tracking
-from backend.app.middleware import RequestLoggingMiddleware, VercelPathCorrectionMiddleware
-
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(VercelPathCorrectionMiddleware)
 

@@ -1,5 +1,8 @@
 """Root entrypoint for Vercel Python runtime."""
 
-from app.main import app
+try:
+    from app.main import app
+except ImportError:
+    from backend.app.main import app
 
 __all__ = ["app"]
