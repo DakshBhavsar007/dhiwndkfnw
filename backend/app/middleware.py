@@ -25,6 +25,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         # Attach request ID to response header
         response.headers["X-Request-ID"] = request_id
+        response.headers["X-Debug-Path"] = request.url.path
 
         # Build structured JSON log payload
         log_payload = {
@@ -39,3 +40,31 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         logger.info(json.dumps(log_payload))
         return response
+
+
+class VercelPathCorrectionMiddleware:
+    """ASGI middleware to correct path when Vercel serverless rewrites modify scope['path']."""
+
+    def __init__(self, app: Callable):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") in ("http", "websocket"):
+            headers = dict(scope.get("headers", []))
+            matched_path = headers.get(b"x-matched-path")
+            if matched_path:
+                decoded = matched_path.decode("utf-8")
+                scope["path"] = decoded.split("?")[0]
+            else:
+                current_path = scope.get("path", "")
+                for prefix in (
+                    "/app/main.py",
+                    "/api/index.py",
+                    "/main.py",
+                    "/api/index",
+                ):
+                    if current_path.startswith(prefix):
+                        scope["path"] = current_path[len(prefix):] or "/"
+                        break
+        await self.app(scope, receive, send)
+

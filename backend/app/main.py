@@ -124,8 +124,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request logging & request-ID tracking
+# Path correction for serverless rewrites & Request logging tracking
+from backend.app.middleware import RequestLoggingMiddleware, VercelPathCorrectionMiddleware
+
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(VercelPathCorrectionMiddleware)
 
 
 @app.get(
