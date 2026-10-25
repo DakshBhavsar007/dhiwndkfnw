@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # Wind-Power Forecast Monitoring Web App
 
 Take-home "Full Stack SWE challenge": a wind-power forecast monitoring web app for a UK energy utility's day-ahead electricity buying team.
@@ -9,10 +13,10 @@ The team buys power on the UK day-ahead market and must decide on day D-1 (befor
 
 ## Data (Elexon BMRS only, national WIND only)
 - **Actuals**: `FUELHH` stream, `fuelType=WIND`. Half-hourly resolution (30-min settlement periods starting at `:00` and `:30`, 48 periods/day). Fields: `startTime` (UTC), `generation` (MW).
-- **Forecasts**: `WINDFOR` stream. Hourly resolution (minute distribution: 100% of rows have `startTime` minute `:00`, 0 rows at `:30`; exactly 73 hourly rows per publish run spanning -24h to +48h). Fields: `startTime` (UTC), `publishTime` (UTC), `generation` (MW).
+- **Forecasts**: `WINDFOR` stream. Hourly resolution (minute distribution: 100% of rows have `startTime` minute `:00`, 0 rows at `:30`). Exactly 73 hourly rows per publish run, i.e. a 72-hour window per run. The window position relative to `publishTime` varies by run: the first slot is 5.5 to 25.5 hours before `publishTime`, and the last slot is 46.5 to 66.5 hours after it. Fields: `startTime` (UTC), `publishTime` (UTC), `generation` (MW).
 - **Ingestion Window**: 2025-12-28 to 2026-02-03 inclusive = **38 days** (4 days in Dec 2025 + 31 days in Jan 2026 + 3 days in Feb 2026).
 - **Scope**: Decisions made in January 2026 (2026-01-01 to 2026-01-31 inclusive). Since decisions made on D-1 are for delivery on D, the delivery days are **2026-01-02 to 2026-02-01** (31 delivery days).
-- **Generation Metric**: Represents national wind power in Megawatts (MW) across visible transmission-metered wind farms (Power Park Modules) for GB. Official API documentation does not explicitly specify whether forecast `generation` is an hourly average MW or instantaneous MW; domain convention treats it as hourly average MW.
+- **Generation Metric**: National wind power in MW. Elexon's API docs do not state the exact scope of FUELHH WIND vs WINDFOR (e.g. whether both cover the same set of wind farms) nor whether forecast `generation` is an hourly average or instantaneous MW. Treated as hourly average MW (assumption). A persistent forecast-above-actual offset (~+1.7 GW) is observed; its cause is not verified.
 
 ## Resolution Alignment: Option A
 - **Forecast / Evaluation Alignment**: `WINDFOR` forecasts have 24 hourly slots per delivery day (00:00 to 23:00 UTC), not 48 periods. For metric calculations and tabular joins, aggregate `FUELHH` actuals to hourly by taking the arithmetic mean of the two 30-minute settlement periods in each hour (`HH:00` and `HH:30`). Join with forecast on the hourly `startTime`.
